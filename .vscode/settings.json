@@ -1,0 +1,11 @@
+{
+  // Vendored third-party agent skills (superpowers, ui-ux-pro-max) live here.
+  // The folder is gitignored; custom Z-CIP skills stay in .github/skills/,
+  // which VS Code discovers by default.
+  "chat.agentSkillsLocations": {
+    ".github/skills": true,
+    ".github/skills-external/superpowers/skills": true,
+    ".github/skills-external/ui-ux-pro-max-skill/.claude/skills": true
+  }
+}
+

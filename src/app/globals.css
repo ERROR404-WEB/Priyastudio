@@ -1,0 +1,185 @@
+@import "tailwindcss";
+
+/* Shared semantic palette. Component CSS consumes roles, not theme-specific colors. */
+:root {
+  color-scheme: light;
+  --background: #fcf9f4;
+  --foreground: #302639;
+  --surface: #fffcf9;
+  --surface-soft: #f1eaf8;
+  --surface-raised: #fffdfa;
+  --primary: #72508f;
+  --primary-hover: #593a74;
+  --on-primary: #ffffff;
+  --muted: #716378;
+  --border: #ded3e6;
+  --input-border: #9d89ae;
+  --accent: #805b98;
+  --lavender: #e5d7f2;
+  --tape: #d5bedfbb;
+  --focus: #8752ae;
+  --glow: #b98bd63b;
+  --shadow: #4f356723;
+  --photo-paper: #fffdfa;
+  --photo-ink: #5e4b65;
+  --on-photo: #fff9ff;
+  --photo-scrim: #24182cc9;
+  --success-bg: #eaf1e9;
+  --success-text: #365a3c;
+  --error-bg: #fbeaec;
+  --error-text: #94364d;
+  --notice-bg: #f1eaf8;
+  --notice-text: #65467e;
+  --font-sans: 'DM Sans', sans-serif;
+  --font-serif: 'Cormorant Garamond', Georgia, serif;
+}
+
+/* Native CSS fallback also gives no-JS visitors their system theme. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --background: #181322; --foreground: #f6efff; --surface: #211b2d;
+    --surface-soft: #2c223c; --surface-raised: #33293f; --primary: #d2b4ee;
+    --primary-hover: #e2cdf7; --on-primary: #291b37; --muted: #c3b3cf;
+    --border: #4c3e5b; --input-border: #877099; --accent: #d6b3ec;
+    --lavender: #382747; --tape: #a68abd9c; --focus: #d9b6ff;
+    --glow: #c795f234; --shadow: #08040b66;
+    --photo-paper: #372b42; --photo-ink: #f0defc;
+    --success-bg: #233a2c; --success-text: #bddcba;
+    --error-bg: #472736; --error-text: #ffc5d1;
+    --notice-bg: #30233e; --notice-text: #ddc2f1;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #181322; --foreground: #f6efff; --surface: #211b2d;
+  --surface-soft: #2c223c; --surface-raised: #33293f; --primary: #d2b4ee;
+  --primary-hover: #e2cdf7; --on-primary: #291b37; --muted: #c3b3cf;
+  --border: #4c3e5b; --input-border: #877099; --accent: #d6b3ec;
+  --lavender: #382747; --tape: #a68abd9c; --focus: #d9b6ff;
+  --glow: #c795f234; --shadow: #08040b66;
+  --photo-paper: #372b42; --photo-ink: #f0defc;
+  --success-bg: #233a2c; --success-text: #bddcba;
+  --error-bg: #472736; --error-text: #ffc5d1;
+  --notice-bg: #30233e; --notice-text: #ddc2f1;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 28px; }
+body { margin: 0; color: var(--foreground); background: var(--background); font-family: var(--font-sans); font-size: 16px; -webkit-font-smoothing: antialiased; }
+button,input,select,textarea { font: inherit; }
+button,a { -webkit-tap-highlight-color: transparent; }
+button { cursor: pointer; }
+a { color: inherit; text-decoration: none; }
+button:disabled { cursor: not-allowed; opacity: .55; }
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 4px; }
+::selection { background: var(--lavender); color: var(--foreground); }
+img { max-width: 100%; }
+h1,h2,h3,p { margin: 0; }
+h1,h2,h3 { font-family: var(--font-serif); font-weight: 500; }
+.button { display: inline-flex; align-items: center; justify-content: center; gap: 12px; min-height: 48px; border: 1px solid transparent; border-radius: 7px; background: var(--primary); color: var(--on-primary); padding: 12px 23px; font-size: 13px; font-weight: 500; transition: background .2s,transform .2s; }
+.button:hover:not(:disabled) { background: var(--primary-hover); transform: translateY(-1px); }
+.button-secondary { background: transparent; color: var(--primary); border-color: var(--input-border); }
+.button-secondary:hover:not(:disabled) { background: var(--surface-soft); }
+.button svg,.text-link svg { flex-shrink: 0; }
+.text-link { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; color: var(--primary); font-size: 13px; }
+.text-link:hover { text-decoration: underline; text-underline-offset: 5px; }
+.eyebrow { font-family: var(--font-sans); font-size: 11px; letter-spacing: 1.8px; font-weight: 500; color: var(--accent); line-height: 1.6; }
+.wordmark { display: inline-flex; gap: 6px; align-items: baseline; font: 500 36px var(--font-serif); letter-spacing: -1px; color: var(--primary); white-space: nowrap; }
+.wordmark i { font-weight: 500; }
+.wordmark svg { align-self: flex-start; margin-top: 5px; margin-left: 2px; }
+.skip-link { position: fixed; top: -100px; left: 16px; z-index: 99; padding: 15px; background: var(--surface); color: var(--foreground); }
+.skip-link:focus { top: 10px; }
+.theme-toggle { position: relative; display: inline-grid; place-items: center; width: 44px; height: 44px; min-width: 44px; flex-shrink: 0; padding: 0; color: var(--primary); background: var(--surface-soft); border: 1px solid var(--input-border); border-radius: 50%; }
+.theme-toggle:hover { background: var(--lavender); }
+.theme-toggle svg { grid-area: 1 / 1; }
+.theme-night { display: none; }
+:root[data-theme="dark"] .theme-day { display: none; }
+:root[data-theme="dark"] .theme-night { display: block; }
+
+/* Private invitation styles share the public palette, not the public data. */
+.share-page { min-height: 100dvh; background: radial-gradient(ellipse at top right,var(--glow),transparent 50%),var(--background); padding: 0 24px 60px; overflow-wrap: anywhere; }
+.share-header { display: flex; align-items: center; justify-content: space-between; gap: 24px; max-width: 1020px; margin: auto; padding: 28px 0; border-bottom: 1px solid var(--border); }
+.share-header > span { display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); }
+.share-header svg { flex-shrink: 0; }
+.share-intro { text-align: center; padding: 55px 15px 34px; }
+.share-intro > h1 { font-size: clamp(39px,4.5vw,62px); line-height: 1.05; margin: 18px 0; letter-spacing: -1px; }
+.share-intro > h1 i { color: var(--accent); }
+.share-intro > p { color: var(--muted); font-size: 14px; }
+.share-layout { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 25px; max-width: 1020px; margin: auto; align-items: start; }
+.share-layout > * { min-width: 0; }
+.share-card { background: var(--surface); border: 1px solid var(--border); border-radius: 13px; padding: 29px; margin-bottom: 22px; }
+.share-card h2 { font-size: 29px; margin-bottom: 16px; }
+.share-card > p { color: var(--muted); font-size: 14px; line-height: 1.8; }
+.share-line { display: flex; justify-content: space-between; gap: 20px; padding: 17px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.share-line strong { font-weight: 500; }
+.share-line small { display: block; color: var(--muted); font-size: 12px; margin-top: 5px; }
+.share-total { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 23px; font-size: 13px; color: var(--primary); }
+.share-total strong { font: 35px var(--font-serif); }
+.share-detail { padding: 17px 0; border-bottom: 1px solid var(--border); }
+.share-detail:last-child { border: 0; }
+.share-detail h3 { font-family: var(--font-sans); font-size: 12px; font-weight: 600; margin-bottom: 8px; }
+.share-detail p { white-space: pre-line; font-size: 13px; line-height: 1.8; color: var(--muted); }
+.share-card .button { width: 100%; margin-top: 12px; }
+.share-card > svg { color: var(--accent) !important; }
+.share-field { display: block; margin-bottom: 17px; font-size: 13px; font-weight: 500; }
+.share-field input,.share-field textarea { display: block; width: 100%; min-width: 0; min-height: 44px; padding: 12px; border: 1px solid var(--input-border); background: var(--background); border-radius: 7px; margin-top: 7px; font-size: 16px; font-weight: 400; color: var(--foreground); }
+.share-field :is(input,textarea)::placeholder { color: var(--muted); opacity: 1; }
+.share-field small { color: var(--muted); font-size: 12px; font-weight: 400; }
+.share-checkbox { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; font-size: 12px; color: var(--muted); line-height: 1.8; margin: 16px 0; cursor: pointer; }
+.share-checkbox input { width: 20px; height: 20px; flex-shrink: 0; margin-top: 2px; accent-color: var(--primary); }
+.share-notice { font-size: 12px !important; background: var(--notice-bg); border: 1px solid var(--border); padding: 13px; border-radius: 6px; margin-bottom: 20px; color: var(--notice-text) !important; }
+.share-error { background: var(--error-bg); padding: 13px; border-radius: 6px; color: var(--error-text); font-size: 13px; margin: 13px 0; }
+.share-success { background: var(--success-bg); color: var(--success-text); padding: 22px; border-radius: 8px; text-align: center; }
+.share-success svg { margin: 0 auto 12px; }
+.share-success h2 { margin-bottom: 10px; }
+.share-success p { font-size: 13px; line-height: 1.8; }
+.share-footnote { max-width: 800px; text-align: center; margin: 30px auto 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.share-comment { padding: 15px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.share-comment strong { color: var(--primary); }
+.share-comment p { margin-top: 9px; white-space: pre-line; line-height: 1.8; }
+.share-comment small { display: block; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.share-loading { min-height: 75dvh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; text-align: center; padding: 30px; }
+.share-loading h1 { font-size: 40px; }
+.share-loading p { font-size: 14px; color: var(--muted); max-width: 460px; }
+.review-visual { width: 100%; height: 290px; object-fit: cover; border-radius: 8px; margin-bottom: 20px; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Login-specific token bridge. Deliberately does not theme or edit the studio shell. */
+html .studio-login {
+  --studio-paper: var(--background); --studio-ink: var(--foreground); --studio-muted: var(--muted);
+  --studio-plum: var(--primary); --studio-plum-dark: var(--primary-hover);
+  background: var(--background); color: var(--foreground);
+}
+html .studio-login-panel { background: radial-gradient(ellipse at top right,var(--glow),transparent 55%),var(--background); }
+html .studio-login :is(.studio-input,.studio-icon-button) { background: var(--surface); color: var(--foreground); border-color: var(--input-border); }
+html .studio-login .studio-input::placeholder { color: var(--muted); }
+html .studio-login .studio-input:focus { border-color: var(--focus); box-shadow: 0 0 0 3px var(--glow); }
+html .studio-login :is(.studio-muted,.studio-field-hint,.studio-field small,.studio-login-private,.studio-login-footer,.studio-eyebrow,.studio-login-demo p) { color: var(--muted); }
+html .studio-login .studio-field { color: var(--foreground); }
+html .studio-login .studio-login-demo { background: var(--surface-soft); border-color: var(--border); }
+html .studio-login .studio-button { background: var(--primary); color: var(--on-primary) !important; }
+html .studio-login .studio-button:hover { background: var(--primary-hover); }
+html .studio-login .studio-button-secondary { background: var(--surface); border-color: var(--input-border); color: var(--primary) !important; }
+html .studio-login .studio-button-secondary:hover { background: var(--surface-soft); }
+html .studio-login :is(.studio-logo,.studio-logo-flower) { color: var(--primary); }
+html .studio-login .studio-error { color: var(--error-text); background: var(--error-bg); border-color: var(--error-text); }
+html .studio-login :is(a,button,input):focus-visible { outline-color: var(--focus); }
+html .studio-login-story { background: var(--photo-scrim); color: var(--on-photo); }
+html .studio-login-story-shade { background: linear-gradient(180deg,transparent,var(--photo-scrim)); }
+html .studio-login-story :is(.studio-eyebrow,p,em,svg,.studio-login-story-footer) { color: var(--on-photo); }
+
+@media (max-width: 760px) {
+  .share-layout { grid-template-columns: minmax(0,1fr); }
+  .share-page { padding-inline: 16px; }
+  .share-header { flex-wrap: wrap; gap: 8px; }
+  .share-header > span { font-size: 10px; }
+  .share-card { padding: 22px; }
+  .share-loading { padding-inline: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *,*::before,*::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  .button:hover { transform: none; }
+}

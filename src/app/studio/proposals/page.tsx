@@ -1,0 +1,1 @@
+export { ProposalsPage as default } from '@/components/studio/proposals';

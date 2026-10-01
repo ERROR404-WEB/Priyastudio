@@ -1,0 +1,1 @@
+export { BrandsPage as default } from '@/components/studio/brands';

@@ -1,0 +1,456 @@
+name: CI
+
+on:
+  push:
+    # develop publishes to the dev registry, main to prod. See the `image` job.
+    branches: [main, develop]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Fast, container-free gates. Kept as a separate job from `tests` so a lint or
+  # type failure reports in under a minute instead of waiting on Docker pulls.
+  static:
+    name: Static checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # --frozen: uv.lock is committed and authoritative. Fail rather than
+      # silently resolving a different dependency set than a developer has.
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Scoped to app/tests/alembic — NOT `.` — and that scope is deliberate:
+      #
+      #   * `ruff format` in ruff >= 0.15 also formats Python code blocks inside
+      #     Markdown. Running it over `.` rewrites `.github/instructions/*.md`,
+      #     `.github/skills/**`, `docs/superpowers/**` and `README.md`, whose
+      #     snippets are illustrative prose, sometimes deliberately elided, and
+      #     are the standards documents themselves. Nine of them fail today.
+      #   * `ruff check .` reports one pre-existing SIM102 (collapsible nested
+      #     `if`) in scripts/check_entity_registry.py. That file is itself a CI
+      #     gate, so a cosmetic rewrite of its control flow carries a risk the
+      #     lint fix does not repay.
+      #
+      # This scope is exactly what is verified locally, and it covers every line
+      # of shipped application code. If scripts/ is ever brought into scope,
+      # bring it into the local gate at the same time so the two cannot drift.
+      - name: Lint
+        run: uv run ruff check app tests alembic
+
+      - name: Format
+        run: uv run ruff format --check app tests alembic
+
+      # The same checkers the PostToolUse hook runs. Hooks only cover agent
+      # sessions in VS Code; CI is the real boundary. These parse source with
+      # `ast` and never import the app, so they need no configuration.
+      - name: Entity registry
+        run: uv run python scripts/check_entity_registry.py
+
+      - name: Route authorization
+        run: uv run python scripts/check_route_authz.py
+
+      - name: Migration safety
+        run: uv run python scripts/check_migration_safety.py
+
+      - name: Types
+        run: uv run mypy app
+
+      # Dependency vulnerabilities. See .github/instructions/dependencies.instructions.md:
+      # a high or critical finding does not merge. pip-audit exits non-zero on any known
+      # vulnerability, which is the gate. If an advisory is genuinely unreachable from our
+      # usage, add `--ignore-vuln <ID>` here with a comment naming it and saying why -
+      # never drop the step to make a build pass.
+      - name: Dependency vulnerabilities
+        run: uv run --with pip-audit pip-audit
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    # There is deliberately no `services: postgres:` block here.
+    #
+    # The suite uses testcontainers: tests/conftest.py starts its own
+    # `postgres:17-alpine` container per session, runs `alembic upgrade head`
+    # against it, and overrides the app's `get_db` dependency to point at it.
+    # A `services:` Postgres would be started, ignored, and mislead the next
+    # reader. What the suite actually needs from the runner is a working Docker
+    # socket, which `ubuntu-latest` provides out of the box.
+    #
+    # ZCIP_DATABASE_URL below is a placeholder, not the database under test.
+    # It exists only because app/api/deps.py calls `get_settings()` at module
+    # import time to build an engine, so pytest collection fails without it and
+    # without the three Entra values. Nothing ever connects to it.
+    #
+    # Note also that app/core/config.py reads a `.env` file when present. That
+    # file is git-ignored and absent on a fresh runner by design; every value
+    # the app needs is supplied as an environment variable here.
+    env:
+      ZCIP_DATABASE_URL: postgresql+asyncpg://placeholder:placeholder@127.0.0.1:5432/placeholder
+      ZCIP_ENTRA_TENANT_ID: a10ba484-6331-40ee-b0ab-cb737ca60a80
+      ZCIP_ENTRA_CLIENT_ID: c2d64a8e-670f-4aa6-bb96-861d444dcb0f
+      ZCIP_ENTRA_API_AUDIENCE: api://c2d64a8e-670f-4aa6-bb96-861d444dcb0f
+      # Also placeholders. The storage settings are required so a deployed environment
+      # cannot start without them; nothing in the suite reaches Azure, and the blob tests
+      # stub the SDK client. None of these values is a secret.
+      ZCIP_STORAGE_ACCOUNT_URL: https://placeholder.blob.core.windows.net
+      ZCIP_AZURE_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+      ZCIP_DOCUMENT_INTELLIGENCE_ENDPOINT: https://placeholder.cognitiveservices.azure.com
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      # Fail loudly and early if the runner image ever changes such that
+      # testcontainers has no daemon to talk to. Without this the failure
+      # surfaces as an opaque connection error from inside a session fixture.
+      - name: Docker daemon is available for testcontainers
+        run: |
+          if ! docker info > /dev/null 2>&1; then
+            echo "::error::No Docker daemon. The test suite starts PostgreSQL via testcontainers and cannot run without one."
+            exit 1
+          fi
+          docker version --format 'docker {{.Server.Version}}'
+
+      - name: Tests
+        run: uv run pytest -q
+
+  permissions-parity:
+    name: Permission catalogue parity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # docs/PERMISSIONS.md must be byte-identical in Z-CIP-BE and Z-CIP-FE.
+      #
+      # The default GITHUB_TOKEN is scoped to this repository only. If Z-CIP-FE
+      # is private, this checkout cannot succeed with it. Supply a repository or
+      # organisation secret named FRONTEND_REPO_TOKEN — a fine-grained PAT, or a
+      # GitHub App installation token, with `Contents: read` on Z-CIP-FE and
+      # nothing else. It is read from the secrets context and never printed.
+      #
+      # `continue-on-error` is on the checkout alone so the next step can turn a
+      # 404-from-git into an actionable message. When checkout is unavailable,
+      # the parity check is skipped with a warning rather than failing CI.
+      - name: Check out the frontend repository
+        id: checkout-frontend
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/Z-CIP-FE
+          path: frontend
+          token: ${{ secrets.FRONTEND_REPO_TOKEN || github.token }}
+          persist-credentials: false
+
+      - name: Warn on a failed frontend checkout
+        if: steps.checkout-frontend.outcome != 'success'
+        run: |
+          echo "::warning::Could not check out ${{ github.repository_owner }}/Z-CIP-FE, so PERMISSIONS.md parity was skipped."
+          echo "::warning::If that repository is private, add a secret named FRONTEND_REPO_TOKEN with Contents: read on Z-CIP-FE."
+          echo "::warning::If the repository was renamed or moved, update the 'repository:' input in .github/workflows/ci.yml."
+
+      - name: PERMISSIONS.md must be byte-identical across repositories
+        if: steps.checkout-frontend.outcome == 'success'
+        run: |
+          if ! diff -u docs/PERMISSIONS.md frontend/docs/PERMISSIONS.md; then
+            echo "::error::docs/PERMISSIONS.md has drifted from the frontend repository. Both copies must be byte-identical; update whichever is stale."
+            exit 1
+          fi
+          echo "PERMISSIONS.md is identical in both repositories."
+
+  # Publishes the container image. Deliberately narrow: build and push, nothing
+  # else. No deployment, no App Service restart, no Alembic run — see
+  # docs/superpowers/specs/2026-08-20-container-image-ci-design.md for why each
+  # of those is out of scope rather than merely unimplemented.
+  image:
+    name: Container image
+    # A GitHub-hosted runner cannot be used. The registry sits behind a private
+    # endpoint and is unreachable from the public internet, so `az acr login`
+    # would hang and then time out.
+    runs-on:
+      group: dda-k8s-runner
+    # Every gate that exists must pass before an image is published. Note that
+    # `permissions-parity` is deliberately NOT here: it checks out Z-CIP-FE with
+    # a token that may be absent, and a cross-repository documentation check must
+    # not be able to block a release.
+    needs: [static, tests]
+    # Pull requests build nothing. With a single `:latest` tag, a PR build would
+    # overwrite the image the dev environment pulls with unmerged code.
+    if: github.event_name == 'push'
+    permissions:
+      # OIDC federated credential exchange. No client secret is stored anywhere.
+      id-token: write
+      contents: read
+    env:
+      REGISTRY_NAME: ${{ github.ref_name == 'main' && vars.REGISTRY_PROD || vars.REGISTRY }}
+      IMAGE_REPOSITORY: cip-backend
+    steps:
+      - uses: actions/checkout@v4
+
+      # The REGISTRY_NAME expression uses `&& ||`, which is not a ternary. When
+      # the correct variable is unset, the expression falls through to the other
+      # branch's variable instead of failing. This guard validates the
+      # branch-specific variable directly before the image is pushed, preventing
+      # a silent push to the wrong registry when the correct variable is absent.
+      - name: The registry variable must be set
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            if [ -z "${{ vars.REGISTRY_PROD }}" ]; then
+              echo "::error::REGISTRY_PROD is not set. Set the repository variable REGISTRY_PROD to the production ACR name, without the .azurecr.io suffix."
+              exit 1
+            fi
+          elif [ "${{ github.ref_name }}" = "develop" ]; then
+            if [ -z "${{ vars.REGISTRY }}" ]; then
+              echo "::error::REGISTRY is not set. Set the repository variable REGISTRY to the development ACR name, without the .azurecr.io suffix."
+              exit 1
+            fi
+          fi
+          echo "Publishing to ${REGISTRY_NAME}.azurecr.io/${IMAGE_REPOSITORY}"
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ github.ref_name == 'main' && secrets.AZURE_CLIENT_ID_PROD || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ github.ref_name == 'main' && secrets.AZURE_TENANT_ID_PROD || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ github.ref_name == 'main' && secrets.AZURE_SUBSCRIPTION_ID_PROD || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to the container registry
+        run: az acr login --name "$REGISTRY_NAME"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          # Attestations would add an unreferenced manifest to the repository.
+          # Nothing here consumes them.
+          provenance: false
+          tags: ${{ env.REGISTRY_NAME }}.azurecr.io/${{ env.IMAGE_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DISABLED 10 September 2026 — BLOCKED ON AN RBAC GRANT, NOT ON CODE.
+  #
+  # This job is correct and was verified to reach Azure; it fails with:
+  #
+  #   (AuthorizationFailed) The client with object id
+  #   b2446508-2a94-49c5-a608-7bd7cd9732ea does not have authorization to perform
+  #   action 'Microsoft.DBforPostgreSQL/flexibleServers/backups/write' over scope
+  #   .../flexibleServers/dev-eastus2-cip-postgres-01/backups/...
+  #
+  # TO RE-ENABLE: have someone with Owner or User Access Administrator grant the
+  # deploy service principal (object id b2446508-2a94-49c5-a608-7bd7cd9732ea) a
+  # role containing `Microsoft.DBforPostgreSQL/flexibleServers/backups/write` at
+  # SERVER scope. Then uncomment this job and restore `needs: pre-migrate-backup`
+  # on `migrate` below. Prod authenticates as a different principal and will need
+  # its own grant.
+  #
+  # UNTIL THEN, MIGRATIONS RUN WITH NO PIPELINE-TAKEN RESTORE POINT. The server's
+  # automatic backups still exist, so recovery means a point-in-time restore to a
+  # timestamp chosen by hand rather than to a labelled snapshot named for the
+  # commit. That is a materially weaker position for `main`, where a bad
+  # migration meets live contract data.
+  #
+  # A restore point, taken before any DDL runs. `migrate` gates on this job, so
+  # a schema change can never reach a database that has no fresh backup — the
+  # gap that made automated migration too risky to adopt previously.
+  #
+  # A storage snapshot: near-instant, no data egress, no load on the server, and
+  # retained under the server's normal policy. The name carries the commit so a
+  # restore can be matched to the migration that prompted it.
+  #
+  # pre-migrate-backup:
+  #   name: Pre-migrate database backup
+  #   runs-on:
+  #     group: dda-k8s-runner
+  #   needs: image
+  #   if: github.event_name == 'push'
+  #   permissions:
+  #     id-token: write
+  #     contents: read
+  #   steps:
+  #     - name: Log in to Azure
+  #       uses: azure/login@v2
+  #       with:
+  #         client-id: ${{ github.ref_name == 'main' && secrets.AZURE_CLIENT_ID_PROD || secrets.AZURE_CLIENT_ID }}
+  #         tenant-id: ${{ github.ref_name == 'main' && secrets.AZURE_TENANT_ID_PROD || secrets.AZURE_TENANT_ID }}
+  #         subscription-id: ${{ github.ref_name == 'main' && secrets.AZURE_SUBSCRIPTION_ID_PROD || secrets.AZURE_SUBSCRIPTION_ID }}
+  #
+  #     - name: Create a labelled on-demand backup
+  #       env:
+  #         # One resource group holds every resource in an environment, so a single
+  #         # RESOURCE_GROUP variable is used throughout rather than one per service.
+  #         # If Postgres is ever moved to its own group, split this rather than
+  #         # pointing the existing variable at the new one.
+  #         RESOURCE_GROUP: ${{ github.ref_name == 'main' && vars.RESOURCE_GROUP_PROD || vars.RESOURCE_GROUP }}
+  #         PG_SERVER_NAME: ${{ github.ref_name == 'main' && vars.PG_SERVER_NAME_PROD || vars.PG_SERVER_NAME }}
+  #       run: |
+  #         set -euo pipefail
+  #         # `&& ||` is not a ternary: when the branch's own variable is unset the
+  #         # expression falls through to the OTHER branch's value. Unguarded, a
+  #         # push to main would back up — and then migrate — the DEV server while
+  #         # reporting success. Check the resolved values before using them.
+  #         if [ -z "${RESOURCE_GROUP:-}" ] || [ -z "${PG_SERVER_NAME:-}" ]; then
+  #           echo "::error::RESOURCE_GROUP and PG_SERVER_NAME must be set for '${{ github.ref_name }}' (use the _PROD suffix on main). These are resource names, not secrets - set them as repository variables."
+  #           exit 1
+  #         fi
+  #         BACKUP_NAME="premigrate-$(echo '${{ github.sha }}' | cut -c1-8)-$(date -u +%Y%m%d%H%M%S)"
+  #         echo "Creating on-demand backup '${BACKUP_NAME}' on ${PG_SERVER_NAME}..."
+  #         az postgres flexible-server backup create \
+  #           --resource-group "$RESOURCE_GROUP" \
+  #           --server-name "$PG_SERVER_NAME" \
+  #           --name "$BACKUP_NAME"
+  #         echo "::notice::Created pre-migrate backup ${BACKUP_NAME} on ${PG_SERVER_NAME}."
+  # ─────────────────────────────────────────────────────────────────────────────
+
+  # Applies Alembic migrations to the deployed database.
+  #
+  # This reverses the original non-goal ("migrations stay a separate, deliberate
+  # action"), and the reasoning has moved on: the safety checker in `static` now
+  # enforces idempotent DDL, a single head, a real downgrade and an explicit
+  # acknowledgement for destructive operations. What remains deliberate is the
+  # ORDER - schema is applied only after the image that needs it exists, and the
+  # app is restarted only after the schema is in place.
+  #
+  # `needs: image` is TEMPORARY. This should be `needs: pre-migrate-backup`, so
+  # that no DDL can reach a database without a fresh labelled restore point; that
+  # job is commented out above pending an RBAC grant. Restore the dependency in
+  # the same change that re-enables it - a backup job nothing depends on protects
+  # nobody.
+  #
+  # A GitHub-hosted runner cannot be used: the server is publicNetworkAccess
+  # Disabled and resolves only to a private address.
+  migrate:
+    name: Database migration
+    runs-on:
+      group: dda-k8s-runner
+    needs: image
+    if: github.event_name == 'push'
+    env:
+      ZCIP_DATABASE_URL: ${{ github.ref_name == 'main' && secrets.ZCIP_DATABASE_URL_PROD || secrets.ZCIP_DATABASE_URL }}
+      # alembic/env.py imports Settings, so `alembic upgrade` constructs the FULL
+      # settings model before it opens a connection. A missing value here fails
+      # with a pydantic ValidationError and no migration runs - the same failure
+      # that stopped the container booting when
+      # ZCIP_DOCUMENT_INTELLIGENCE_ENDPOINT was added. These are placeholders;
+      # nothing in a migration reaches Entra, storage or Document Intelligence.
+      ZCIP_ENTRA_TENANT_ID: placeholder
+      ZCIP_ENTRA_CLIENT_ID: placeholder
+      ZCIP_ENTRA_API_AUDIENCE: placeholder
+      ZCIP_STORAGE_ACCOUNT_URL: https://placeholder.blob.core.windows.net
+      ZCIP_AZURE_CLIENT_ID: 00000000-0000-0000-0000-000000000000
+      ZCIP_DOCUMENT_INTELLIGENCE_ENDPOINT: https://placeholder.cognitiveservices.azure.com
+      # Migration 0002 creates the first platform administrator and is a SILENT
+      # no-op when this is empty. It runs exactly once per database, so if it is
+      # unset on the run that first reaches 0002, that environment has no
+      # administrator, every user provisions as `viewer`, and nobody can grant
+      # the first role. Re-running the pipeline does not fix it.
+      ZCIP_BOOTSTRAP_ADMIN_EMAIL: ${{ github.ref_name == 'main' && vars.BOOTSTRAP_ADMIN_EMAIL_PROD || vars.BOOTSTRAP_ADMIN_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: The database URL and bootstrap address must be set
+        run: |
+          set -euo pipefail
+          # Same fall-through hazard as the backup job. Without this guard an
+          # unset ZCIP_DATABASE_URL_PROD would silently migrate the DEV database
+          # from a main build.
+          if [ -z "${ZCIP_DATABASE_URL:-}" ]; then
+            echo "::error::No database URL for '${{ github.ref_name }}'. Set the secret ZCIP_DATABASE_URL_PROD (main) or ZCIP_DATABASE_URL (develop)."
+            exit 1
+          fi
+          if [ -z "${ZCIP_BOOTSTRAP_ADMIN_EMAIL:-}" ]; then
+            echo "::error::BOOTSTRAP_ADMIN_EMAIL is unset for '${{ github.ref_name }}'. Migration 0002 would run as a no-op and this database would be left with no platform administrator, permanently - 0002 never runs twice. Set the repository variable (use the _PROD suffix on main) before merging."
+            exit 1
+          fi
+
+      # `alembic current` before and after makes the job log say which revisions
+      # this run actually applied, which is the first thing wanted when a
+      # deployed environment misbehaves.
+      - name: Current revision
+        run: uv run alembic current
+
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+
+      - name: Revision after upgrade
+        run: uv run alembic current
+
+  # Azure App Service continuous deployment is OFF for this app (verified: no
+  # DOCKER_ENABLE_CI, and `az webapp deployment container show-cd-url` returns
+  # False), so pushing `:latest` does NOT restart anything. Without this job the
+  # new image sits in the registry until a human restarts the app, and the
+  # database has already moved ahead of the running code.
+  restart-app-service:
+    name: Restart the App Service
+    runs-on:
+      group: dda-k8s-runner
+    needs: migrate
+    if: github.event_name == 'push'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ github.ref_name == 'main' && secrets.AZURE_CLIENT_ID_PROD || secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ github.ref_name == 'main' && secrets.AZURE_TENANT_ID_PROD || secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ github.ref_name == 'main' && secrets.AZURE_SUBSCRIPTION_ID_PROD || secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Restart, then confirm the app answers
+        env:
+          RESOURCE_GROUP: ${{ github.ref_name == 'main' && vars.RESOURCE_GROUP_PROD || vars.RESOURCE_GROUP }}
+          BACKEND_APP_SERVICE: ${{ github.ref_name == 'main' && vars.BACKEND_APP_SERVICE_PROD || vars.BACKEND_APP_SERVICE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RESOURCE_GROUP:-}" ] || [ -z "${BACKEND_APP_SERVICE:-}" ]; then
+            echo "::error::RESOURCE_GROUP and BACKEND_APP_SERVICE must be set for '${{ github.ref_name }}' (use the _PROD suffix on main)."
+            exit 1
+          fi
+          az webapp restart --name "$BACKEND_APP_SERVICE" --resource-group "$RESOURCE_GROUP"
+
+          # A restart command that returns 0 only means the request was
+          # accepted. The container can still fail to boot - a missing setting
+          # makes Settings() raise, the site stops, and every request 503s while
+          # the browser reports it as a CORS error. Poll /health so that failure
+          # is reported here, against this commit, rather than found by a user.
+          HOST="$(az webapp show --name "$BACKEND_APP_SERVICE" --resource-group "$RESOURCE_GROUP" --query defaultHostName -o tsv)"
+          echo "Waiting for https://${HOST}/health ..."
+          for attempt in $(seq 1 30); do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "https://${HOST}/health" || echo 000)"
+            if [ "$code" = "200" ]; then
+              echo "::notice::${BACKEND_APP_SERVICE} is healthy after restart."
+              exit 0
+            fi
+            echo "  attempt ${attempt}/30: HTTP ${code}"
+            sleep 10
+          done
+          echo "::error::${BACKEND_APP_SERVICE} did not return 200 from /health within 5 minutes. The migration HAS been applied; inspect the container logs (az webapp log download) before re-running."
+          exit 1

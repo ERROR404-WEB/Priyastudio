@@ -1,0 +1,1 @@
+export { CollaborationsPage as default } from '@/components/studio/collaborations';

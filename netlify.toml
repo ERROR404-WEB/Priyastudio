@@ -1,0 +1,26 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"
+
+# Netlify automatically installs its current Next.js runtime adapter for App Router functions.
+# Set secrets in the site's environment settings, never in this file.
+# Preview deployments require their own exact BETTER_AUTH_URL and isolated database/secret.
+# Netlify Blobs uses a site-scoped named store; previews can share it. Do not upload private files.
+
+[[headers]]
+  for = "/p/*"
+  [headers.values]
+    Cache-Control = "no-store"
+    Referrer-Policy = "no-referrer"
+    X-Robots-Tag = "noindex, nofollow, noarchive"
+
+[[headers]]
+  for = "/review/*"
+  [headers.values]
+    Cache-Control = "no-store"
+    Referrer-Policy = "no-referrer"
+    X-Robots-Tag = "noindex, nofollow, noarchive"

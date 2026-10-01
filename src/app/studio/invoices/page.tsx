@@ -1,0 +1,1 @@
+export { InvoicesPage as default } from '@/components/studio/invoices';

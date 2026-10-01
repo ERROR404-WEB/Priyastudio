@@ -1,0 +1,10 @@
+node_modules/
+.next/
+.netlify/
+.data/
+.env*
+!.env.example
+*.tsbuildinfo
+playwright-report/
+test-results/
+.superpowers/
