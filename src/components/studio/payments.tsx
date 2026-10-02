@@ -11,7 +11,7 @@ import { matchesSearch, useStudio } from './store';
 
 type ReceiptInput = Omit<Payment, 'createdAt' | 'reversedAt'>;
 
-function PaymentForm({ initialCollaborationId, onClose }: { initialCollaborationId: string; onClose: () => void }) {
+export function PaymentForm({ initialCollaborationId, onClose }: { initialCollaborationId: string; onClose: () => void }) {
   const { state, mutate } = useStudio();
   const task = useTask();
   const [id] = useState(() => crypto.randomUUID());

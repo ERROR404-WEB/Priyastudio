@@ -2,16 +2,18 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
-import { CalendarDays, RefreshCw } from 'lucide-react';
-import { errorMessage, requestJSON } from '@/lib/client';
+import { CalendarDays, RefreshCw, Wallet } from 'lucide-react';
+import { errorMessage, requestJSON, rupeesToPaise } from '@/lib/client';
 import { indiaDateTime, localShootTime, parseShoot, upcomingShoots, type CalendarAction, type CalendarView, type Shoot, type ShootInput } from '@/lib/calendar';
+import { collaborationBalance, formatMoney } from '@/lib/domain';
 import { Badge, ConfirmDialog, EmptyState, ErrorNotice, Field, PageHeading, useTask } from '@/components/ui/studio-primitives';
 import type { Brand } from '@/lib/types';
 import { BrandPicker, ensureBrand } from './forms';
-import { useStudio } from './store';
+import { PaymentForm } from './payments';
+import { useStudio, useOptionalStudio } from './store';
 
 type CollaborationChoice = { id: string; title: string };
-type NewCollaboration = { id: string; brandId: string; brandName: string; category: string; title: string };
+type NewCollaboration = { id: string; brandId: string; brandName: string; category: string; title: string; paymentAmount?: number };
 type CreateCollaboration = (input: NewCollaboration) => Promise<CollaborationChoice>;
 const NEW_COLLABORATION = '__new__';
 const control: CSSProperties = { minHeight: 44, minWidth: 44 };
@@ -72,10 +74,11 @@ export function useCalendarData(enabled: boolean) {
 	return { view, error, accept, reload };
 }
 
-export function ShootPlanner({ collaborations, editing, onSave, onClose, busy = false, brands = [], onCreateCollaboration }: {
+export function ShootPlanner({ collaborations, editing, onSave, onClose, busy = false, brands = [], onCreateCollaboration, onSetPaymentPlan }: {
 	collaborations: readonly CollaborationChoice[]; editing?: Shoot | null;
 	onSave: (shoot: ShootInput, expectedRevision: number) => Promise<void>; onClose: () => void; busy?: boolean;
 	brands?: readonly Pick<Brand, 'id' | 'name' | 'category'>[]; onCreateCollaboration?: CreateCollaboration;
+	onSetPaymentPlan?: (collaborationId: string, pending: number) => Promise<void>;
 }) {
 	const task = useTask();
 	const [id] = useState(() => editing?.id ?? crypto.randomUUID());
@@ -102,9 +105,13 @@ export function ShootPlanner({ collaborations, editing, onSave, onClose, busy = 
 				const reminders = reminderChoice === 'custom' ? text('reminders') : reminderChoice;
 				if (reminders && !/^\d+(\s*,\s*\d+)*$/.test(reminders)) throw new Error('Use comma-separated whole reminder minutes, for example 1440, 60.');
 				let choices = collaborations; let collaborationId = text('collaborationId');
+				const paymentText = text('paymentAmount');
+				const paymentAmount = paymentText ? rupeesToPaise(paymentText) : undefined;
 				if (creating && onCreateCollaboration) {
-					const created = await onCreateCollaboration({ id: newIds.collaboration, brandId: newIds.brand, brandName, category: text('brandCategory'), title: text('newTitle') });
+					const created = await onCreateCollaboration({ id: newIds.collaboration, brandId: newIds.brand, brandName, category: text('brandCategory'), title: text('newTitle'), paymentAmount });
 					choices = [...collaborations, created]; collaborationId = created.id;
+				} else if (collaborationId && paymentAmount !== undefined && onSetPaymentPlan) {
+					await onSetPaymentPlan(collaborationId, paymentAmount);
 				}
 				try {
 					shoot = parseShoot({ id, collaborationId, title: text('title'), location: text('location'),
@@ -126,6 +133,7 @@ export function ShootPlanner({ collaborations, editing, onSave, onClose, busy = 
 					<BrandPicker brands={brands} value={brandName} onChange={setBrandName} />
 					<Field label="Collaboration title" hint="Added to your collaborations as “Yet to visit”."><input className="studio-input" style={control} name="newTitle" required maxLength={300} placeholder="October café reel" /></Field>
 				</>}
+				<Field label="Agreed fee / Payment amount (₹, optional)" hint="Set fee amount. Mark payment received later when paid."><input className="studio-input" style={control} name="paymentAmount" inputMode="decimal" pattern="[0-9]+(\.[0-9]{1,2})?" maxLength={16} placeholder="e.g. 5000" /></Field>
 				<Field label="Title (optional)" hint="Leave blank to use the collaboration title."><input className="studio-input" style={control} name="title" maxLength={200} defaultValue={editing?.title ?? ''} /></Field>
 				<Field label="Start date"><input className="studio-input" style={control} type="date" name="startDate" required defaultValue={start.date} /></Field>
 				<Field label="Start time"><input className="studio-input" style={control} type="time" name="startTime" required defaultValue={start.time} /></Field>
@@ -145,17 +153,21 @@ export function ShootPlanner({ collaborations, editing, onSave, onClose, busy = 
 	</section>;
 }
 
-export function CalendarScreen({ view, collaborations, onAction, onConnect, busy = false, onReload, brands, onCreateCollaboration }: {
+export function CalendarScreen({ view, collaborations, onAction, onConnect, busy = false, onReload, brands, onCreateCollaboration, onSetPaymentPlan }: {
 	view: CalendarView; collaborations: readonly CollaborationChoice[];
 	onAction: (action: CalendarAction) => Promise<void>; onConnect: () => Promise<void>; busy?: boolean; onReload?: () => Promise<void>;
 	brands?: readonly Pick<Brand, 'id' | 'name' | 'category'>[]; onCreateCollaboration?: CreateCollaboration;
+	onSetPaymentPlan?: (collaborationId: string, pending: number) => Promise<void>;
 }) {
+	const studio = useOptionalStudio();
+	const state = studio?.state;
 	const task = useTask();
 	const [editing, setEditing] = useState<Shoot | null>(null);
 	const [formVersion, setFormVersion] = useState(0);
 	const [cancel, setCancel] = useState<Shoot | null>(null);
 	const [retry, setRetry] = useState<Shoot | null>(null);
 	const [disconnect, setDisconnect] = useState(false);
+	const [recordingPaymentFor, setRecordingPaymentFor] = useState<string | null>(null);
 	const reset = () => { setEditing(null); setFormVersion((value) => value + 1); };
 	return <>
 		<PageHeading eyebrow="SHOOT CALENDAR" title="Shoot calendar" description="Plan visits, keep shoot times together, and see what has reached Google Calendar." action={onReload && <button className="studio-button studio-button-secondary" style={control} disabled={busy} onClick={() => void task.run(onReload)}><RefreshCw size={16} aria-hidden="true" /> Reload calendar</button>} />
@@ -169,25 +181,37 @@ export function CalendarScreen({ view, collaborations, onAction, onConnect, busy
 			</div>
 		</section>
 		<ErrorNotice message={task.error} />
-		<ShootPlanner key={`${editing?.id ?? 'new'}:${formVersion}`} collaborations={collaborations} brands={brands} onCreateCollaboration={onCreateCollaboration} editing={editing} busy={busy} onClose={reset} onSave={async (shoot, expectedRevision) => { await onAction({ action: 'save', shoot, expectedRevision }); reset(); }} />
+		<ShootPlanner key={`${editing?.id ?? 'new'}:${formVersion}`} collaborations={collaborations} brands={brands} onCreateCollaboration={onCreateCollaboration} onSetPaymentPlan={onSetPaymentPlan} editing={editing} busy={busy} onClose={reset} onSave={async (shoot, expectedRevision) => { await onAction({ action: 'save', shoot, expectedRevision }); reset(); }} />
 		<section aria-labelledby="saved-shoots-heading"><h2 id="saved-shoots-heading">Saved shoots</h2>
 			{!view.shoots.length ? <EmptyState title="No shoots planned yet" description="Use the form above to save your first visit or shoot." /> : <ul style={{ padding: 0, listStyle: 'none' }}>
-				{view.shoots.map((shoot) => <li key={shoot.id} className="studio-card" style={card}>
-					<div style={{ ...actions, justifyContent: 'space-between' }}><h3>{shoot.title}</h3><Badge tone={shoot.status === 'synced' ? 'sage' : shoot.status === 'error' ? 'amber' : 'neutral'}>{statusText(shoot)}</Badge></div>
-					<p><time dateTime={shoot.startsAt}>{when(shoot)}</time></p>
-					{shoot.location && <p>{shoot.location}</p>}
-					<p className="studio-muted">Reminders: {reminderLabel(shoot.reminderMinutes)}{view.demo ? ' · preview only' : shoot.status !== 'synced' ? ' · awaiting Google sync' : ''}</p>
-					{shoot.error && <p role="status">{shoot.error}</p>}
-					<div style={actions}>
-						{!shoot.cancelled && <><button className="studio-button studio-button-secondary" style={control} disabled={busy} aria-label={`Reschedule ${shoot.title}`} onClick={() => setEditing(shoot)}>Reschedule</button><button className="studio-button studio-button-quiet" style={control} disabled={busy} aria-label={`Cancel ${shoot.title}`} onClick={() => setCancel(shoot)}>Cancel shoot</button></>}
-						{view.connected && view.configured && shoot.status !== 'cancelled' && <button className="studio-button studio-button-secondary" style={control} disabled={busy || task.pending} onClick={() => setRetry(shoot)}>{shoot.cancelled ? 'Retry deletion' : shoot.status === 'synced' ? 'Check Google sync' : 'Retry sync'}</button>}
-					</div>
-				</li>)}
+				{view.shoots.map((shoot) => {
+					const collab = state?.collaborations.find((c) => c.id === shoot.collaborationId);
+					const balance = collab && state ? collaborationBalance(collab, state.invoices, state.payments) : null;
+					return <li key={shoot.id} className="studio-card" style={card}>
+						<div style={{ ...actions, justifyContent: 'space-between' }}>
+							<h3>{shoot.title}</h3>
+							<div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+								<Badge tone={shoot.status === 'synced' ? 'sage' : shoot.status === 'error' ? 'amber' : 'neutral'}>{statusText(shoot)}</Badge>
+								{balance?.pending !== null && balance?.pending !== undefined && balance.pending > 0 ? <Badge tone="amber">Pending: {formatMoney(balance.pending)}</Badge> : balance?.expected !== null && balance?.expected !== undefined && balance.pending === 0 ? <Badge tone="sage">Paid: {formatMoney(balance.received)}</Badge> : null}
+							</div>
+						</div>
+						<p><time dateTime={shoot.startsAt}>{when(shoot)}</time></p>
+						{shoot.location && <p>{shoot.location}</p>}
+						<p className="studio-muted">Reminders: {reminderLabel(shoot.reminderMinutes)}{view.demo ? ' · preview only' : shoot.status !== 'synced' ? ' · awaiting Google sync' : ''}</p>
+						{shoot.error && <p role="status">{shoot.error}</p>}
+						<div style={actions}>
+							{!shoot.cancelled && <><button className="studio-button studio-button-secondary" style={control} disabled={busy} aria-label={`Reschedule ${shoot.title}`} onClick={() => setEditing(shoot)}>Reschedule</button><button className="studio-button studio-button-quiet" style={control} disabled={busy} aria-label={`Cancel ${shoot.title}`} onClick={() => setCancel(shoot)}>Cancel shoot</button></>}
+							{collab && (balance?.pending === null || (balance?.pending ?? 0) > 0) && <button className="studio-button studio-button-secondary" style={control} disabled={busy} onClick={() => setRecordingPaymentFor(collab.id)}><Wallet size={15} /> Record payment</button>}
+							{view.connected && view.configured && shoot.status !== 'cancelled' && <button className="studio-button studio-button-secondary" style={control} disabled={busy || task.pending} onClick={() => setRetry(shoot)}>{shoot.cancelled ? 'Retry deletion' : shoot.status === 'synced' ? 'Check Google sync' : 'Retry sync'}</button>}
+						</div>
+					</li>;
+				})}
 			</ul>}
 		</section>
 		{cancel && <ConfirmDialog title="Cancel this shoot?" description={`${cancel.title} will stay in your studio history. If Google is connected, its matching app-created event will be deleted. A failed deletion remains visible for retry.`} confirmLabel="Cancel shoot" onClose={() => setCancel(null)} onConfirm={() => onAction({ action: 'cancel', id: cancel.id, expectedRevision: cancel.revision })} />}
 		{retry && <ConfirmDialog title={retry.cancelled ? 'Retry Google deletion?' : 'Sync this shoot to Google?'} description={retry.cancelled ? 'Retry deleting the matching app-created event. The cancelled shoot stays in your studio history.' : 'Apply the latest saved studio details to the matching app-created event in your connected account. An event deleted in Google may be recreated; this is not a read-only check.'} confirmLabel={retry.cancelled ? 'Retry deletion' : 'Sync shoot'} onClose={() => setRetry(null)} onConfirm={() => onAction({ action: 'retry', id: retry.id })} />}
 		{disconnect && <ConfirmDialog title="Disconnect Google Calendar?" description="Stored Google credentials will be removed and revocation attempted. Your studio shoots and existing Google events stay in place. Cancel any unwanted synced events before disconnecting. An already-sent request may still finish at Google." confirmLabel="Disconnect calendar" onClose={() => setDisconnect(false)} onConfirm={() => onAction({ action: 'disconnect' })} />}
+		{recordingPaymentFor && <PaymentForm initialCollaborationId={recordingPaymentFor} onClose={() => setRecordingPaymentFor(null)} />}
 	</>;
 }
 
@@ -233,10 +257,13 @@ export function CalendarPage({ connectionResult }: { connectionResult?: 'connect
 		// A retry after a lost response must not create the same collaboration twice.
 		if (!state.collaborations.some((item) => item.id === input.id)) await mutate({ type: 'collaboration.create', data: {
 			id: input.id, brandId: brand.id, title: input.title, category: input.category.trim() || brand.category,
-			stage: 'yet_to_visit', dueDate: '', image: '', reelUrl: '', description: '',
+			stage: 'yet_to_visit', dueDate: '', image: '', reelUrl: '', description: '', expectedPayment: input.paymentAmount,
 		} });
 		return { id: input.id, title: input.title };
 	}
+	async function setPaymentPlan(collaborationId: string, pending: number) {
+		await mutate({ type: 'collaboration.payment-plan', id: collaborationId, pending });
+	}
 	if (!data.view) return <section className="studio-card" style={card}><h1>Shoot calendar</h1>{data.error ? <><ErrorNotice message={data.error} /><Link href="/login">Sign in</Link><button className="studio-button" style={control} onClick={() => void data.reload()}>Try loading again</button></> : <p role="status">Loading private shoots…</p>}</section>;
-	return <>{notice && <p className="studio-info-box" role="status">{notice}</p>}<ErrorNotice message={data.error} /><CalendarScreen view={data.view} collaborations={state.collaborations} brands={state.brands} onCreateCollaboration={createCollaboration} onAction={action} onConnect={connect} onReload={data.reload} busy={busy} /></>;
-}
+	return <>{notice && <p className="studio-info-box" role="status">{notice}</p>}<ErrorNotice message={data.error} /><CalendarScreen view={data.view} collaborations={state.collaborations} brands={state.brands} onCreateCollaboration={createCollaboration} onSetPaymentPlan={setPaymentPlan} onAction={action} onConnect={connect} onReload={data.reload} busy={busy} /></>;
+}

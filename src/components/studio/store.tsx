@@ -90,6 +90,11 @@ export function useStudio(): StudioContextValue {
   return context;
 }
 
+export function useOptionalStudio(): StudioContextValue | null {
+  return useContext(StudioContext);
+}
+
+
 export function matchesSearch(search: string, ...values: (string | undefined)[]): boolean {
   const haystack = values.filter(Boolean).join(' ').toLocaleLowerCase();
   return search.trim().toLocaleLowerCase().split(/\s+/).every((word) => haystack.includes(word));
