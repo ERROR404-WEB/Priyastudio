@@ -39,8 +39,17 @@ function statusText(shoot: Shoot) {
 	return shoot.status === 'synced' ? 'Google synced' : shoot.status === 'error' ? 'Saved in studio · Google sync needs attention' : 'Saved in studio · Google sync pending';
 }
 
+export function formatShootWindow(startsAt: string, endsAt: string): string {
+  const start = new Date(startsAt);
+  const end = new Date(endsAt);
+  const dateStr = new Intl.DateTimeFormat('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }).format(start);
+  const startTimeStr = new Intl.DateTimeFormat('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }).format(start);
+  const endTimeStr = new Intl.DateTimeFormat('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }).format(end);
+  return `${dateStr}, ${startTimeStr} – ${endTimeStr}`;
+}
+
 /** Private-only: fetches the owner endpoint when data is not supplied by a parent. */
-function useCalendarData(enabled: boolean) {
+export function useCalendarData(enabled: boolean) {
 	const [view, setView] = useState<CalendarView | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const sequence = useRef(0);

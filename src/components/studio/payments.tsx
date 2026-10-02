@@ -93,11 +93,16 @@ export function PaymentsPage() {
   const [planning, setPlanning] = useState<string | null>(null);
   const [reversing, setReversing] = useState<Payment | null>(null);
   const [filter, setFilter] = useState('all');
+  const [sort, setSort] = useState<'latest' | 'oldest'>('latest');
   const metrics = dashboard(state);
   const invoiceFor = (payment: Payment) => state.invoices.find((invoice) => invoice.id === payment.invoiceId);
   const collaborationFor = (payment: Payment) => state.collaborations.find((item) => item.id === (payment.collaborationId || invoiceFor(payment)?.collaborationId));
   const brandName = (brandId: string | undefined) => state.brands.find((brand) => brand.id === brandId)?.name;
   const payments = state.payments.filter((payment) => (filter === 'all' || (filter === 'reversed' ? !!payment.reversedAt : !payment.reversedAt)) && matchesSearch(search, collaborationFor(payment)?.title, invoiceFor(payment)?.number, brandName(collaborationFor(payment)?.brandId), payment.reference, payment.method, payment.date, payment.reversedAt ? 'reversed' : 'received'));
+  const sortedPayments = [...payments].sort((a, b) => {
+    if (sort === 'oldest') return a.date.localeCompare(b.date) || a.createdAt.localeCompare(b.createdAt);
+    return b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt);
+  });
   const collaborations = state.collaborations.filter((item) => matchesSearch(search, item.title, brandName(item.brandId)));
   const planned = state.collaborations.find((item) => item.id === planning);
   const create = <button className="studio-button" onClick={() => setCreating('')}><Plus size={17} /> Record payment</button>;
@@ -113,8 +118,8 @@ export function PaymentsPage() {
         </td></tr>;
       })}</tbody></table>
     </div></section>}
-    <div className="studio-toolbar"><label className="studio-filter"><span className="studio-sr-only">Filter receipts</span><select className="studio-input" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All receipts</option><option value="active">Active receipts</option><option value="reversed">Reversed receipts</option></select></label><span className="studio-results-count" role="status">{payments.length} ledger entries</span><span className="studio-toolbar-note">Receipts are money received, not profit.</span></div>
-    {payments.length ? <div className="studio-card studio-table-scroll" role="region" aria-label="Receipt ledger" tabIndex={0}><table className="studio-table"><thead><tr><th>Collaboration & brand</th><th>Received on</th><th>Amount</th><th>Method / reference</th><th>Status</th><th>Actions</th></tr></thead><tbody>{[...payments].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)).map((payment) => <tr key={payment.id} className={payment.reversedAt ? 'studio-reversed-row' : ''}>
+    <div className="studio-toolbar"><label className="studio-filter"><span className="studio-sr-only">Filter receipts</span><select className="studio-input" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">All receipts</option><option value="active">Active receipts</option><option value="reversed">Reversed receipts</option></select></label><label className="studio-filter"><span className="studio-sr-only">Sort receipts</span><select className="studio-input" value={sort} onChange={(event) => setSort(event.target.value as any)}><option value="latest">Sort: Latest first</option><option value="oldest">Sort: Oldest first</option></select></label><span className="studio-results-count" role="status">{sortedPayments.length} ledger entries</span><span className="studio-toolbar-note">Receipts are money received, not profit.</span></div>
+    {sortedPayments.length ? <div className="studio-card studio-table-scroll" role="region" aria-label="Receipt ledger" tabIndex={0}><table className="studio-table"><thead><tr><th>Collaboration & brand</th><th>Received on</th><th>Amount</th><th>Method / reference</th><th>Status</th><th>Actions</th></tr></thead><tbody>{sortedPayments.map((payment) => <tr key={payment.id} className={payment.reversedAt ? 'studio-reversed-row' : ''}>
       <td><div className="studio-table-work"><span className="studio-receipt-icon"><ArrowDownLeft size={21} /></span><span><strong>{collaborationFor(payment)?.title}</strong><small>{brandName(collaborationFor(payment)?.brandId)}{payment.invoiceId ? ` · ${invoiceFor(payment)?.number}` : ' · Direct payment'}</small></span></div></td>
       <td>{prettyDate(payment.date, { year: 'numeric' })}</td><td className="studio-money">{formatMoney(payment.amount)}</td><td><div className="studio-stacked-cell"><span>{payment.method}</span><small>{payment.reference || 'No reference added'}</small></div></td>
       <td><Badge tone={payment.reversedAt ? 'rose' : 'sage'}>{payment.reversedAt ? 'Reversed' : 'Received'}</Badge>{payment.reversedAt && <small className="studio-reversal-date">{prettyDate(payment.reversedAt, { year: 'numeric' })}</small>}</td><td>{!payment.reversedAt ? <button className="studio-button studio-button-quiet" onClick={() => setReversing(payment)}><RotateCcw size={15} /> Reverse</button> : <span className="studio-muted">History preserved</span>}</td>

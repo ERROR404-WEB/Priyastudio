@@ -105,8 +105,10 @@ const collaborationPatchSchema = z.object({
 /** Validate untrusted commands at every caller boundary; system-managed fields are never accepted. */
 export const commandSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('brand.create'), data: brandDataSchema }).strict(),
+  z.object({ type: z.literal('brand.delete'), id: idSchema }).strict(),
   z.object({ type: z.literal('collaboration.create'), data: collaborationDataSchema }).strict(),
   z.object({ type: z.literal('collaboration.update'), id: idSchema, data: collaborationPatchSchema }).strict(),
+  z.object({ type: z.literal('collaboration.delete'), id: idSchema }).strict(),
   z.object({ type: z.literal('collaboration.payment-plan'), id: idSchema, pending: pendingSchema }).strict(),
   z.object({ type: z.literal('invoice.create'), data: invoiceDataSchema }).strict(),
   z.object({ type: z.literal('invoice.issue'), id: idSchema }).strict(),
@@ -286,6 +288,23 @@ export function applyCommand(state: StudioState, command: Command, actor: string
       next.brands.push({ ...input.data, createdAt: at });
       targetId = input.data.id;
       break;
+    case 'brand.delete': {
+      find(next.brands, input.id, 'Brand');
+      if (next.collaborations.some((c) => c.brandId === input.id)) {
+        throw new Error('Cannot delete a brand with existing collaborations. Delete its collaborations first.');
+      }
+      if (next.proposals.some((p) => p.brandId === input.id)) {
+        throw new Error('Cannot delete a brand with active proposals. Delete its proposals first.');
+      }
+      if (next.invoices.some((i) => i.brandId === input.id && i.status !== 'void')) {
+        throw new Error('Cannot delete a brand with active invoices');
+      }
+      next.invoices = next.invoices.filter((i) => i.brandId !== input.id);
+      next.proposals = next.proposals.filter((p) => p.brandId !== input.id);
+      next.brands = next.brands.filter((b) => b.id !== input.id);
+      targetId = input.id;
+      break;
+    }
     case 'collaboration.create':
       unique(next.collaborations, input.data.id);
       find(next.brands, input.data.brandId, 'Brand');
@@ -296,6 +315,22 @@ export function applyCommand(state: StudioState, command: Command, actor: string
       const collaboration = find(next.collaborations, input.id, 'Collaboration');
       // Explicit undefined is legal in JS Partial<T>, but must not erase stored fields.
       Object.assign(collaboration, Object.fromEntries(Object.entries(input.data).filter(([, value]) => value !== undefined)));
+      targetId = input.id;
+      break;
+    }
+    case 'collaboration.delete': {
+      find(next.collaborations, input.id, 'Collaboration');
+      if (next.invoices.some((i) => i.collaborationId === input.id && i.status !== 'void')) {
+        throw new Error('Cannot delete a collaboration with active invoices');
+      }
+      if (next.payments.some((p) => p.collaborationId === input.id && !p.reversedAt)) {
+        throw new Error('Cannot delete a collaboration with active payments');
+      }
+      next.invoices = next.invoices.filter((i) => i.collaborationId !== input.id);
+      next.payments = next.payments.filter((p) => p.collaborationId !== input.id);
+      next.testimonials = next.testimonials.filter((t) => t.collaborationId !== input.id);
+      next.shares = next.shares.filter((s) => s.targetId !== input.id || s.scope !== 'review');
+      next.collaborations = next.collaborations.filter((c) => c.id !== input.id);
       targetId = input.id;
       break;
     }

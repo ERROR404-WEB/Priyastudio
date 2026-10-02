@@ -18,8 +18,10 @@ export interface AuditEntry { id: string; action: string; actor: string; targetI
 export interface StudioState { revision: number; profile: Profile; brands: Brand[]; collaborations: Collaboration[]; invoices: Invoice[]; payments: Payment[]; proposals: Proposal[]; testimonials: Testimonial[]; shares: ShareLink[]; audit: AuditEntry[] }
 export type Command =
   | { type: 'brand.create'; data: Omit<Brand, 'createdAt'> }
+  | { type: 'brand.delete'; id: string }
   | { type: 'collaboration.create'; data: Omit<Collaboration, 'createdAt' | 'published'> }
   | { type: 'collaboration.update'; id: string; data: Partial<Pick<Collaboration, 'stage' | 'dueDate' | 'image' | 'reelUrl' | 'description' | 'published'>> }
+  | { type: 'collaboration.delete'; id: string }
   | { type: 'collaboration.payment-plan'; id: string; pending: number }
   | { type: 'invoice.create'; data: Omit<Invoice, 'number' | 'status' | 'createdAt'> }
   | { type: 'invoice.issue'; id: string }
